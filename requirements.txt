@@ -1,0 +1,26 @@
+# Backend Dependencies - Python 3.13 compatible
+# Uses latest versions with pre-built wheels
+
+# Core Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Database
+sqlalchemy>=2.0.25
+aiosqlite>=0.19.0  # SQLite for dev
+asyncpg>=0.29.0     # PostgreSQL async driver for production
+
+# Redis
+redis>=5.0.0
+
+# Validation - LATEST versions with wheels
+pydantic>=2.10.0
+pydantic-settings>=2.1.0
+email-validator>=2.0.0
+
+# Authentication
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.1.0
+
+# Environment
+python-dotenv>=1.0.0
