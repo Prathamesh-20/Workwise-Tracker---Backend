@@ -1075,3 +1075,208 @@ async def get_member_activity(
         "timeline": timeline[:100],  # Cap at 100 entries
     }
 
+
+# ============================================================
+# DETECTED APPS & TABS
+# ============================================================
+
+_BROWSER_NAMES = [
+    "chrome", "google chrome", "firefox", "mozilla firefox",
+    "edge", "microsoft edge", "safari", "brave", "opera",
+    "duckduckgo", "vivaldi", "arc", "browser",
+]
+
+_BROWSER_SUFFIXES = [
+    " - Google Chrome", " - Mozilla Firefox", " - Firefox",
+    " - Microsoft Edge", " - Edge", " - Safari", " - Brave",
+    " - Opera", " - Vivaldi", " - Arc", " - DuckDuckGo",
+    " - Brave Browser",
+]
+
+
+def _is_browser(app_name: str) -> bool:
+    lower = app_name.lower().strip()
+    return any(b == lower or b in lower for b in _BROWSER_NAMES)
+
+
+def _strip_browser_suffix(title: str) -> str:
+    for suffix in _BROWSER_SUFFIXES:
+        if title.endswith(suffix):
+            return title[: -len(suffix)].strip()
+    # Generic fallback: strip last " - XYZ" if it looks like a browser
+    parts = title.rsplit(" - ", 1)
+    if len(parts) == 2 and any(b in parts[1].lower() for b in _BROWSER_NAMES):
+        return parts[0].strip()
+    return title
+
+
+def _match_rule(app_name: str, window_title: str, rules: list[TeamAppRule]):
+    """
+    Check a tab against team rules (same logic as classify_activity).
+    Returns (category, rule_pattern, rule_id) or (None, None, None).
+    """
+    combined = f"{app_name} {window_title or ''}".lower()
+    for rule in rules:
+        pattern = rule.app_pattern.lower()
+        match = False
+        if rule.match_type == "exact":
+            match = pattern == app_name.lower() or pattern == (window_title or "").lower()
+        elif rule.match_type == "startswith":
+            match = app_name.lower().startswith(pattern) or (window_title or "").lower().startswith(pattern)
+        else:
+            match = pattern in combined
+        if match:
+            return rule.category, rule.app_pattern, rule.id
+    return None, None, None
+
+
+@router.get("/teams/{team_id}/detected-apps")
+async def get_detected_apps(
+    team_id: str,
+    days: int = Query(7, ge=1, le=30, description="Days to look back"),
+    _admin: TokenData = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return grouped, deduplicated apps and tabs detected from team member
+    activity logs over the last N days, with rule-match status for each tab.
+    """
+    from difflib import SequenceMatcher
+    from collections import defaultdict
+
+    # Verify team
+    team_result = await db.execute(select(Team).where(Team.id == team_id))
+    team = team_result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    # Get team members
+    members_result = await db.execute(select(User).where(User.team_id == team_id))
+    members = members_result.scalars().all()
+    member_ids = [m.id for m in members]
+
+    if not member_ids:
+        return {
+            "team_id": team_id,
+            "apps": [],
+            "summary": {"total_apps": 0, "total_unique_tabs": 0, "classified_tabs": 0, "unclassified_tabs": 0},
+        }
+
+    # Get team rules
+    rules_result = await db.execute(select(TeamAppRule).where(TeamAppRule.team_id == team_id))
+    rules = rules_result.scalars().all()
+
+    # Fetch activity logs
+    since = datetime.now() - timedelta(days=days)
+    INTERVAL = 5
+
+    # Structure: app_name -> { window_title -> { seconds, users } }
+    apps_data: dict[str, dict[str, dict]] = defaultdict(lambda: defaultdict(lambda: {"seconds": 0, "users": set()}))
+
+    for mid in member_ids:
+        logs_result = await db.execute(
+            select(
+                DesktopActivityLog.app_name,
+                DesktopActivityLog.window_title,
+            ).where(
+                and_(
+                    DesktopActivityLog.user_id == mid,
+                    DesktopActivityLog.timestamp >= since,
+                    DesktopActivityLog.is_idle == False,
+                )
+            )
+        )
+        for row in logs_result.all():
+            app_name = row[0] or "Unknown"
+            win_title = row[1] or app_name
+            entry = apps_data[app_name][win_title]
+            entry["seconds"] += INTERVAL
+            entry["users"].add(mid)
+
+    # Build result
+    result_apps = []
+
+    for app_name, tabs_dict in apps_data.items():
+        is_browser = _is_browser(app_name)
+
+        # Build tab list with display names
+        raw_tabs = []
+        for win_title, info in tabs_dict.items():
+            if is_browser:
+                display = _strip_browser_suffix(win_title)
+            else:
+                display = win_title if win_title and win_title != app_name else app_name
+            raw_tabs.append({
+                "window_title": win_title,
+                "display_name": display,
+                "total_seconds": info["seconds"],
+                "users": info["users"],
+            })
+
+        # Deduplicate similar tabs (>= 90% similarity)
+        merged_tabs = []
+        used = set()
+        # Sort by seconds desc so we keep the most-used title as primary
+        raw_tabs.sort(key=lambda t: t["total_seconds"], reverse=True)
+
+        for i, tab in enumerate(raw_tabs):
+            if i in used:
+                continue
+            merged = dict(tab)
+            merged["users"] = set(tab["users"])
+            for j in range(i + 1, len(raw_tabs)):
+                if j in used:
+                    continue
+                ratio = SequenceMatcher(
+                    None,
+                    tab["display_name"].lower(),
+                    raw_tabs[j]["display_name"].lower(),
+                ).ratio()
+                if ratio >= 0.9:
+                    merged["total_seconds"] += raw_tabs[j]["total_seconds"]
+                    merged["users"] |= raw_tabs[j]["users"]
+                    used.add(j)
+            merged_tabs.append(merged)
+
+        # Match each tab against rules
+        final_tabs = []
+        for tab in merged_tabs:
+            cat, matched_rule, matched_rule_id = _match_rule(app_name, tab["window_title"], rules)
+            final_tabs.append({
+                "window_title": tab["window_title"],
+                "display_name": tab["display_name"],
+                "total_seconds": tab["total_seconds"],
+                "user_count": len(tab["users"]),
+                "current_category": cat,
+                "matched_rule": matched_rule,
+                "matched_rule_id": matched_rule_id,
+            })
+
+        # Sort tabs by total_seconds desc
+        final_tabs.sort(key=lambda t: t["total_seconds"], reverse=True)
+
+        app_total_seconds = sum(t["total_seconds"] for t in final_tabs)
+        result_apps.append({
+            "app_name": app_name,
+            "is_browser": is_browser,
+            "total_seconds": app_total_seconds,
+            "tabs": final_tabs,
+        })
+
+    # Sort apps by total_seconds desc
+    result_apps.sort(key=lambda a: a["total_seconds"], reverse=True)
+
+    # Summary
+    total_tabs = sum(len(a["tabs"]) for a in result_apps)
+    classified = sum(1 for a in result_apps for t in a["tabs"] if t["current_category"] is not None)
+
+    return {
+        "team_id": team_id,
+        "apps": result_apps,
+        "summary": {
+            "total_apps": len(result_apps),
+            "total_unique_tabs": total_tabs,
+            "classified_tabs": classified,
+            "unclassified_tabs": total_tabs - classified,
+        },
+    }
