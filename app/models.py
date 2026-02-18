@@ -70,6 +70,7 @@ class Team(Base):
 
     # Relationships
     members: Mapped[list["User"]] = relationship("User", back_populates="team")
+    app_rules: Mapped[list["TeamAppRule"]] = relationship("TeamAppRule", back_populates="team", cascade="all, delete-orphan")
 
 
 # ============================================================
@@ -234,3 +235,36 @@ class DesktopActivityLog(Base):
         Index("ix_desktop_activity_app", "app_name"),
         Index("ix_desktop_activity_session", "session_id"),
     )
+
+
+# ============================================================
+# TEAM APP RULE MODEL
+# ============================================================
+
+class TeamAppRule(Base):
+    """Rule to classify apps as productive/neutral/non_productive per team"""
+    __tablename__ = "team_app_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    app_pattern: Mapped[str] = mapped_column(String(255), nullable=False)
+    match_type: Mapped[str] = mapped_column(String(20), default="contains")  # contains, exact, startswith
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="neutral")  # productive, neutral, non_productive
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    # Relationships
+    team: Mapped["Team"] = relationship("Team", back_populates="app_rules")
+
+    __table_args__ = (
+        Index("ix_team_app_rules_team", "team_id"),
+        Index("ix_team_app_rules_category", "category"),
+    )
+

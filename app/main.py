@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.api import auth, logs, status, health, rules, analytics, sync, desktop_analytics, fraud_detection, admin
+from app.api import auth, logs, status, health, rules, analytics, sync, desktop_analytics, fraud_detection, admin, teams
 from app.config import settings
 from app.database import init_db
 from app.users import create_default_users_async
@@ -63,6 +63,8 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"]
 app.include_router(sync.router, prefix="/api", tags=["Desktop Sync"])
 app.include_router(desktop_analytics.router, prefix="/api/analytics", tags=["Desktop Analytics"])
 app.include_router(fraud_detection.router, prefix="/api", tags=["Fraud Detection"])
+app.include_router(teams.router, prefix="/api", tags=["Teams"])
+
 
 
 @app.get("/")
