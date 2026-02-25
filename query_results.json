@@ -1,0 +1,14 @@
+[
+  {
+    "is_idle": false,
+    "snapshot_count": 1345,
+    "total_seconds": 6725,
+    "total_minutes": 112
+  },
+  {
+    "is_idle": true,
+    "snapshot_count": 2153,
+    "total_seconds": 10765,
+    "total_minutes": 179
+  }
+]
