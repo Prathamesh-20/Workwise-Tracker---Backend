@@ -41,7 +41,7 @@ BROWSERS = ["chrome", "firefox", "edge", "safari", "brave", "opera", "arc"]
 # ============================================================================
 
 SNAPSHOT_INTERVAL = 5          # seconds between each agent snapshot
-IDLE_SMOOTHING_WINDOW = 60     # seconds - idle periods shorter than this between
+IDLE_SMOOTHING_WINDOW = 90     # seconds - idle periods shorter than this between
                                 # active periods on same app are counted as active
 GAP_THRESHOLD = 300            # seconds (5 min) - gaps larger than this between
                                 # snapshots are excluded (agent was stopped/break)
@@ -178,9 +178,9 @@ def smooth_idle_status(logs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         smoothed[j]["is_idle"] = False
                         smoothed[j]["smoothed"] = True  # flag for debugging
 
-                # Even if different apps, if streak is very short (<=15s = 3 snapshots)
-                # it's likely just an app switch, not real idle
-                elif streak_seconds <= 15:
+                # Even if different apps, if streak is very short (<=30s = 6 snapshots)
+                # it's likely just an app switch or brief pause, not real idle
+                elif streak_seconds <= 30:
                     for j in range(streak_start, streak_end):
                         smoothed[j]["is_idle"] = False
                         smoothed[j]["smoothed"] = True
